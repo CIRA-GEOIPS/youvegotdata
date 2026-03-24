@@ -11,7 +11,6 @@ permissions:
   contents: read
   id-token: write
   
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -91,6 +90,7 @@ jobs:
   publish-pypi:
     needs: [build, test-built-package]
     runs-on: ubuntu-latest
+    environment: pypi
     #if: github.event_name == 'release'
     steps:
       - name: Download build artifacts
@@ -101,5 +101,3 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_TOKEN }}
