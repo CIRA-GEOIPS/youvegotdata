@@ -14,9 +14,9 @@ requires-python = ">=3.8"
 
 dependencies = ["pika"]
 
-[project.optional-dependencies]
-test = ["pytest"]
-
 authors = [
   {name = "Jim Fluke", email = "james.fluke@colostate.edu" }
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
