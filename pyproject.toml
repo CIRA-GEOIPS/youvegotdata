@@ -5,6 +5,9 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta" 
 
 [project]
+authors = [
+  {name = "Jim Fluke", email = "james.fluke@colostate.edu" }
+]
 name = "youvegotdata" # REQUIRED
 version = "1.0.0"
 description = "Send new file notifications"
@@ -16,7 +19,3 @@ dependencies = ["pika"]
 
 [project.optional-dependencies]
 test = ["pytest"]
-
-authors = [
-  {name = "Jim Fluke", email = "james.fluke@colostate.edu" }
-]
