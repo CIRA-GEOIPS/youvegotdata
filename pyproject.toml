@@ -9,7 +9,7 @@ authors = [
   {name = "Jim Fluke", email = "james.fluke@colostate.edu" }
 ]
 name = "youvegotdata" # REQUIRED
-version = "1.0.0"
+version = "1.0.1-beta"
 description = "Send new file notifications"
 readme = "README.md"
 
@@ -19,3 +19,6 @@ dependencies = ["pika"]
 
 [project.optional-dependencies]
 test = ["pytest"]
+
+[project.scripts]
+my-command = "youvegotdata:main"
