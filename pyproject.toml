@@ -21,4 +21,4 @@ dependencies = ["pika"]
 test = ["pytest"]
 
 [project.scripts]
-my-command = "youvegotdata:main"
+my-command = "youvegotdata.youvegotdata:main"
