@@ -9,13 +9,13 @@ authors = [
   {name = "Jim Fluke", email = "james.fluke@colostate.edu" }
 ]
 name = "youvegotdata" # REQUIRED
-version = "1.0.1b4"
+version = "1.0.1b5"
 description = "Send new file notifications"
 readme = "README.md"
 
 requires-python = ">=3.8"
 
-dependencies = ["pika"]
+dependencies = ["pika", "platformdirs"]
 
 [project.optional-dependencies]
 test = ["pytest"]

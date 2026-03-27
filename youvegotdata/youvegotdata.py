@@ -9,6 +9,7 @@ import argparse
 import pika
 import json
 import configparser
+from platformdirs import user_config_dir
 
 DESCRIPTION = """
 Allows a data ingest process to send a new file notification to the Data
@@ -17,6 +18,8 @@ file metadata to the Data Inventory DB.
 """
 
 log = logging.getLogger(__name__)
+
+APP_NAME = "youvegotdata"
 
 def parse_mountinfo_alike(fobj):
     mount_entries = []
@@ -247,11 +250,14 @@ def main():
     logging.getLogger("pika").setLevel(logging.WARNING)
 
     # Read the configuration file
+    config_dpath = user_config_dir(APP_NAME)
+    config_fpath = os.path.join(config_dpath, "config.ini")
+    log.debug(f"config_fpath = {config_fpath}")
+
     config = configparser.ConfigParser()
-    try:
-        config.read("config.ini")
-    except FileNotFoundError:
-        log.error("config.ini not found. Please ensure the file exists.")
+    files_read = config.read(config_fpath)
+    if not files_read:
+        log.error(f"{config_fpath} not found. Please ensure the file exists.")
         exit()
 
     log.info("Sending a new file notification")
