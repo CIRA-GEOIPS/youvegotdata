@@ -12,24 +12,32 @@ into the database. It is expected that multiple consumers process will be
 accepting messages in RabbitMQ's "fair dispatch" configuration. A given
 notification will be received by one consumer.
 
-## Running youvegotdata.py
-This must be run in a Python environment that includes `pika` - for connecting
-to RabbitMQ -  and other needed packages. The `environ-3.8.yml` file in this
-repository can be used to create a workable conda environment. Setting one up
-using `pip` will certainly also work. Python 3.8 is the minimum version needed
-to run the script. Higher versions should work.
+## Installing youvegotdata
+This module requires Python 3.8 or greater.
+It is deployed to PyPi, so it can be installed with:
+```
+pip install youvegotdata
+```
+Which will install the `ygd` CLI command in your current Python environment.
 
-Copy the template-config.ini file to config.ini and edit the config.ini as
-described inside that file.
+## Running youvegotdata.py as ygd
+Create the ~/.config/youvegotdata/ directory if it does not already exist.
+Create a `config.ini` file in this directory that looks like:
+```
+[Settings]
+RMQ_HOST = <host of the RabbitMQ server>
+```
+And fill it in with the RabbitMQ server's host name.
+
 Run the code with:
 ```
-python youvegotdata.py [-h] [-v] [-p PRODUCT] [-r VERSION] [-s START_TIME] [-e END_TIME] [-l LENGTH] [-c CHECKSUM] [-t CHECKSUM_TYPE] filepath
+ygd [-h] [-v] [-p PRODUCT] [-r VERSION] [-s START_TIME] [-e END_TIME] [-l LENGTH] [-c CHECKSUM] [-t CHECKSUM_TYPE] filepath
 ```
 Run this with the -h (--help) argument to see the available flagged arguments.
 
 This will usually be run with just the `filepath` argument. An example is:
 ```
-python youvegotdata/youvegotdata.py /full/path/to/local/file/data_file.hdf
+ygd /full/path/to/local/file/data_file.hdf
 ```
 If run from a local repository of this project.
 
