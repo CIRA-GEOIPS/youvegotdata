@@ -9,6 +9,7 @@ import argparse
 import pika
 import json
 import configparser
+import ast
 from platformdirs import user_config_dir
 
 DESCRIPTION = """
@@ -85,7 +86,55 @@ def parse_mountinfo():
     return mount_entries
 
 
-def resolve_data_store(filepath):
+def resolve_ceph_store(filepath, mount, ceph_mapping):
+    log.info(
+        f"Ceph Source: {mount['mount_source']:<20} Mount Point: {mount['mount_point']:<20} FS Type: {mount['filesystem_type']:<10} Options: {mount['super_options']}"
+    )
+
+    if "," in mount['mount_source']:
+        # The list of IPs is in the "mount_source"
+        iplist = mount['mount_source'].split(",")
+
+        dev_dir = iplist[-1].split(":")[-1]
+        if dev_dir != "/":
+            log.error(
+                f"Found a ceph 'mount_source' that has a device dir:"
+                f" {dev_dir}"
+            )
+
+        # But trim off the ports
+        iplist = [ip.split(":")[0] for ip in iplist]
+    else:
+        # The list of IPs is in the "super_options" "mon_addr"
+        for opt in mount["super_options"]:
+            if opt.startswith("mon_addr="):
+                ips_str = opt[len("mon_addr="):]
+                break
+
+        iplist = ips_str.split("/")
+
+        # Still trim off the ports
+        iplist = [ip.split(":")[0] for ip in iplist]
+
+        if mount['mount_source'][-2] != "=/":
+            log.error(
+                f"Found a ceph 'mount_source': \"{mount['mount_source']}\""
+                f" that has a device dir"
+            )
+
+    for ips_map in ceph_mapping.values():
+        # The ips in ips_map must all be in the "mount_source" list
+        if all(item in iplist for item in ips_map):
+            # This is the needed mapping
+            # For now, saying that there is no device dir for ceph mounts
+            return f"ceph-IPs:{','.join(ips_map)}", filepath
+
+    # TODO, handle device dirs for ceph mounts
+
+    return None, None
+
+
+def resolve_data_store(filepath, ceph_mapping):
     """
     Get the data store name and the absolute path from the data store.
     filepath: The filepath argument given to the program
@@ -95,11 +144,15 @@ def resolve_data_store(filepath):
     data_store = None
     fpath = None
     mp_match_len = 0
-    log.info("Currently mounted filesystems:")
+    log.debug("Currently mounted filesystems:")
     for mount in parse_mountinfo():
         log.debug(
             f"Source: {mount['mount_source']:<20} Mount Point: {mount['mount_point']:<20} FS Type: {mount['filesystem_type']:<10} Options: {mount['super_options']}"
         )
+        if mount["filesystem_type"] == "ceph":
+            data_store, fpath = resolve_ceph_store(filepath, mount, ceph_mapping)
+            if data_store:
+                break
         if mount["mount_point"] == "/":
             # Skip this - every path will match it
             continue
@@ -135,8 +188,13 @@ def produce_notification(
     Send a "Fair Dispatch" message via RabbitMQ
     """
 
+    log.info(f'CEPH_IPS:  {config["Data-store-mappings"]["CEPH_IPS"]}')
+
+    ceph_ips = ast.literal_eval(config["Data-store-mappings"]["CEPH_IPS"])
+    log.info(f'ceph_ips:  {ceph_ips}')
+
     # Get the data store name and the absolute path from the data store
-    data_store, fpath = resolve_data_store(filepath)
+    data_store, fpath = resolve_data_store(filepath, ceph_ips)
     log.info(f"data_store: {data_store}, fpath: {fpath}")
 
     log.info(f'RMQ_HOST:  {config["Settings"]["RMQ_HOST"]}')
