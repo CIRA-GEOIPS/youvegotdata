@@ -47,6 +47,14 @@ CEPH_ROCKY_9_4_MOUNTINFO_LINE = (
     "168.10.10.11:4400/168.10.10.12:4400"
 )
 
+# A Ceph mount where mount_source is a Rocky 9.4 type of mount, but with no
+# mon_addr.
+CEPH_ROCKY_9_4_NO_MON_ADDR_MOUNTINFO_LINE = (
+    "828 76 0:61 / /mnt/data3 rw,relatime shared:436 - ceph"
+    " admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+    " rw,name=admin,secret=<hidden>,ms_mode=prefer-crc,acl"
+)
+
 # The root mount (should be skipped by resolve_data_store).
 ROOT_MOUNTINFO_LINE = (
     "1 0 8:0 / / rw,relatime shared:0 - ext4 /dev/sda rw"
@@ -92,6 +100,15 @@ class TestParseMountinfoAlike:
         assert e["mount_point"] == "/mnt/data3"
         assert e["filesystem_type"] == "ceph"
         assert e["mount_source"] == "admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+        assert "mon_addr=" in ",".join(e["super_options"])
+
+    def test_ceph_rocky_9_4_no_mon_addr_mount_parsed_correctly(self):
+        entries = parse_mountinfo_alike(_lines(CEPH_ROCKY_9_4_NO_MON_ADDR_MOUNTINFO_LINE))
+        e = entries[0]
+        assert e["mount_point"] == "/mnt/data3"
+        assert e["filesystem_type"] == "ceph"
+        assert e["mount_source"] == "admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+        assert "mon_addr=" not in ",".join(e["super_options"])
 
     def test_nfs_mount_parsed_correctly(self):
         entries = parse_mountinfo_alike(_lines(NFS_MOUNTINFO_LINE))
@@ -211,10 +228,20 @@ class TestResolveDataStore:
         with patch(
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
-            data_store, fpath = resolve_data_store("/mnt/data2/subdir/file.hdf", ceph_ips)
+            data_store, fpath = resolve_data_store("/mnt/data3/subdir/file.hdf", ceph_ips)
         assert data_store == "ceph-IPs:168.10.10.9,168.10.10.11,168.10.10.12"
         # The mount_source path (/exports) should replace the mount point prefix
-        assert fpath == "/mnt/data2/subdir/file.hdf"
+        assert fpath == "/mnt/data3/subdir/file.hdf"
+
+    def test_ceph_rocky_9_4_no_mon_addr_mount_returns_server_and_remote_path(self):
+        ceph_ips = self._make_ceph_mapping()
+        mounts = self._mock_parse(CEPH_ROCKY_9_4_NO_MON_ADDR_MOUNTINFO_LINE)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store("/mnt/data3/subdir/file.hdf", ceph_ips)
+        assert data_store == None
+        assert fpath == None
 
     def test_nfs_mount_returns_server_and_remote_path(self):
         ceph_ips = self._make_ceph_mapping()
@@ -291,7 +318,7 @@ class TestProduceNotification:
             checksum_type="md5",
         )
         defaults.update(kwargs)
-        #logging.info("defaults: {defaults}")
+        logging.debug("defaults: {defaults}")
         ceph_ips = ast.literal_eval(defaults["config"]["Data-store-mappings"]["CEPH_IPS"])
         assert ceph_ips["/mnt/data2"] == ["168.10.10.9", "168.10.10.11", "168.10.10.12"]
 
