@@ -3,6 +3,7 @@
 import configparser
 import io
 import json
+import ast
 import logging
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -29,6 +30,29 @@ LOCAL_MOUNTINFO_LINE = (
 # An NFS mount where mount_source contains a host:path pair.
 NFS_MOUNTINFO_LINE = (
     "42 1 0:35 / /mnt/nfs rw,relatime shared:2 - nfs4 nfsserver:/exports rw,vers=4"
+)
+
+# A Ceph mount where mount_source is a Rocky 8.7 type of mount.
+CEPH_ROCKY_8_7_MOUNTINFO_LINE = ( "469 200 0:55 / /mnt/data2 rw,relatime shared:332 - ceph"
+    " 168.10.10.9:5789,168.10.10.10:5789,168.10.10.11:5789,168.10.10.12:5789,168.10.10.13:5789:/"
+    " rw,name=admin,secret=<hidden>,acl"
+)
+
+# A Ceph mount where mount_source is a Rocky 9.4 type of mount.
+CEPH_ROCKY_9_4_MOUNTINFO_LINE = (
+    "828 76 0:61 / /mnt/data3 rw,relatime shared:436 - ceph"
+    " admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+    " rw,name=admin,secret=<hidden>,ms_mode=prefer-crc,acl,"
+    "mon_addr=10.168.42.192:4400/10.168.42.193:4400/168.10.10.9:4400/"
+    "168.10.10.11:4400/168.10.10.12:4400"
+)
+
+# A Ceph mount where mount_source is a Rocky 9.4 type of mount, but with no
+# mon_addr.
+CEPH_ROCKY_9_4_NO_MON_ADDR_MOUNTINFO_LINE = (
+    "828 76 0:61 / /mnt/data3 rw,relatime shared:436 - ceph"
+    " admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+    " rw,name=admin,secret=<hidden>,ms_mode=prefer-crc,acl"
 )
 
 # The root mount (should be skipped by resolve_data_store).
@@ -63,6 +87,29 @@ class TestParseMountinfoAlike:
         assert "rw" in e["super_options"]
         assert e["raw_line"] == LOCAL_MOUNTINFO_LINE.strip()
 
+    def test_ceph_rocky_8_7_mount_parsed_correctly(self):
+        entries = parse_mountinfo_alike(_lines(CEPH_ROCKY_8_7_MOUNTINFO_LINE))
+        e = entries[0]
+        assert e["mount_point"] == "/mnt/data2"
+        assert e["filesystem_type"] == "ceph"
+        assert e["mount_source"] == "168.10.10.9:5789,168.10.10.10:5789,168.10.10.11:5789,168.10.10.12:5789,168.10.10.13:5789:/"
+
+    def test_ceph_rocky_9_4_mount_parsed_correctly(self):
+        entries = parse_mountinfo_alike(_lines(CEPH_ROCKY_9_4_MOUNTINFO_LINE))
+        e = entries[0]
+        assert e["mount_point"] == "/mnt/data3"
+        assert e["filesystem_type"] == "ceph"
+        assert e["mount_source"] == "admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+        assert "mon_addr=" in ",".join(e["super_options"])
+
+    def test_ceph_rocky_9_4_no_mon_addr_mount_parsed_correctly(self):
+        entries = parse_mountinfo_alike(_lines(CEPH_ROCKY_9_4_NO_MON_ADDR_MOUNTINFO_LINE))
+        e = entries[0]
+        assert e["mount_point"] == "/mnt/data3"
+        assert e["filesystem_type"] == "ceph"
+        assert e["mount_source"] == "admin@39bde8b9-3ab3-22f1-0b76-4cecefb8c925.data3=/"
+        assert "mon_addr=" not in ",".join(e["super_options"])
+
     def test_nfs_mount_parsed_correctly(self):
         entries = parse_mountinfo_alike(_lines(NFS_MOUNTINFO_LINE))
         e = entries[0]
@@ -76,9 +123,9 @@ class TestParseMountinfoAlike:
 
     def test_multiple_lines_parsed(self):
         entries = parse_mountinfo_alike(
-            _lines(LOCAL_MOUNTINFO_LINE, NFS_MOUNTINFO_LINE, ROOT_MOUNTINFO_LINE)
+            _lines(LOCAL_MOUNTINFO_LINE, NFS_MOUNTINFO_LINE, CEPH_ROCKY_8_7_MOUNTINFO_LINE, CEPH_ROCKY_9_4_MOUNTINFO_LINE, ROOT_MOUNTINFO_LINE)
         )
-        assert len(entries) == 3
+        assert len(entries) == 5
 
     def test_no_super_options(self):
         # A line where the last_part has only two fields (no super options).
@@ -145,51 +192,93 @@ class TestParseMountinfo:
 
 
 class TestResolveDataStore:
+    def _make_ceph_mapping(self,
+      ip_mapping='{"/mnt/data2": ["168.10.10.9", "168.10.10.11", "168.10.10.12"]}'):
+        ceph_ips = ast.literal_eval(ip_mapping)
+        return ceph_ips
+
     def _mock_parse(self, *lines):
         """Return a list of mount entries parsed from the given lines."""
         return parse_mountinfo_alike(_lines(*lines))
 
     def test_local_mount_returns_device_and_filepath(self):
+        ceph_ips = self._make_ceph_mapping()
         mounts = self._mock_parse(LOCAL_MOUNTINFO_LINE)
         with patch(
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
-            data_store, fpath = resolve_data_store("/data/subdir/file.hdf")
+            data_store, fpath = resolve_data_store("/data/subdir/file.hdf", ceph_ips)
         assert data_store == "/dev/sda1"
         assert fpath == "/data/subdir/file.hdf"
 
+    def test_ceph_rocky_8_7_mount_returns_server_and_remote_path(self):
+        ceph_ips = self._make_ceph_mapping()
+        mounts = self._mock_parse(CEPH_ROCKY_8_7_MOUNTINFO_LINE)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store("/mnt/data2/subdir/file.hdf", ceph_ips)
+        assert data_store == "ceph-IPs:168.10.10.9,168.10.10.11,168.10.10.12"
+        # The mount_source path (/exports) should replace the mount point prefix
+        assert fpath == "/mnt/data2/subdir/file.hdf"
+
+    def test_ceph_rocky_9_4_mount_returns_server_and_remote_path(self):
+        ceph_ips = self._make_ceph_mapping()
+        mounts = self._mock_parse(CEPH_ROCKY_9_4_MOUNTINFO_LINE)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store("/mnt/data3/subdir/file.hdf", ceph_ips)
+        assert data_store == "ceph-IPs:168.10.10.9,168.10.10.11,168.10.10.12"
+        # The mount_source path (/exports) should replace the mount point prefix
+        assert fpath == "/mnt/data3/subdir/file.hdf"
+
+    def test_ceph_rocky_9_4_no_mon_addr_mount_returns_server_and_remote_path(self):
+        ceph_ips = self._make_ceph_mapping()
+        mounts = self._mock_parse(CEPH_ROCKY_9_4_NO_MON_ADDR_MOUNTINFO_LINE)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store("/mnt/data3/subdir/file.hdf", ceph_ips)
+        assert data_store == None
+        assert fpath == None
+
     def test_nfs_mount_returns_server_and_remote_path(self):
+        ceph_ips = self._make_ceph_mapping()
         mounts = self._mock_parse(NFS_MOUNTINFO_LINE)
         with patch(
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
-            data_store, fpath = resolve_data_store("/mnt/nfs/subdir/file.hdf")
+            data_store, fpath = resolve_data_store("/mnt/nfs/subdir/file.hdf", ceph_ips)
         assert data_store == "nfsserver"
         # The mount_source path (/exports) should replace the mount point prefix
         assert fpath == "/exports/subdir/file.hdf"
 
     def test_no_matching_mount_returns_none(self):
         # Only the root mount, which is skipped.
+        ceph_ips = self._make_ceph_mapping()
         mounts = self._mock_parse(ROOT_MOUNTINFO_LINE)
         with patch(
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
-            data_store, fpath = resolve_data_store("/unrelated/file.hdf")
+            data_store, fpath = resolve_data_store("/unrelated/file.hdf", ceph_ips)
         assert data_store is None
         assert fpath is None
 
     def test_root_mount_is_skipped(self):
         # Even though "/" prefix-matches everything, it must be skipped.
+        ceph_ips = self._make_ceph_mapping()
         mounts = self._mock_parse(ROOT_MOUNTINFO_LINE, LOCAL_MOUNTINFO_LINE)
         with patch(
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
-            data_store, _ = resolve_data_store("/data/file.hdf")
+            data_store, _ = resolve_data_store("/data/file.hdf", ceph_ips)
         # /data mount should win, not the root mount
         assert data_store == "/dev/sda1"
 
     def test_longest_prefix_mount_wins(self):
         # /data and /data/archive are both valid prefixes; /data/archive is longer.
+        ceph_ips = self._make_ceph_mapping()
         archive_line = (
             "24 23 8:2 / /data/archive rw,relatime - ext4 /dev/sdb1 rw"
         )
@@ -197,7 +286,7 @@ class TestResolveDataStore:
         with patch(
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
-            data_store, fpath = resolve_data_store("/data/archive/file.hdf")
+            data_store, fpath = resolve_data_store("/data/archive/file.hdf", ceph_ips)
         assert data_store == "/dev/sdb1"
         assert fpath == "/data/archive/file.hdf"
 
@@ -208,9 +297,11 @@ class TestResolveDataStore:
 
 
 class TestProduceNotification:
-    def _make_config(self, host="rmq.example.com"):
+    def _make_config(self, host="rmq.example.com",
+      ip_mapping='{"/mnt/data2": ["168.10.10.9", "168.10.10.11", "168.10.10.12"]}'):
         config = configparser.ConfigParser()
         config["Settings"] = {"RMQ_HOST": host}
+        config["Data-store-mappings"] = {"CEPH_IPS": ip_mapping}
         return config
 
     def _run(self, **kwargs):
@@ -227,6 +318,9 @@ class TestProduceNotification:
             checksum_type="md5",
         )
         defaults.update(kwargs)
+        logging.debug("defaults: {defaults}")
+        ceph_ips = ast.literal_eval(defaults["config"]["Data-store-mappings"]["CEPH_IPS"])
+        assert ceph_ips["/mnt/data2"] == ["168.10.10.9", "168.10.10.11", "168.10.10.12"]
 
         mock_channel = MagicMock()
         mock_connection = MagicMock()
