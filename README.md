@@ -26,8 +26,14 @@ Create a `config.ini` file in this directory that looks like:
 ```
 [Settings]
 RMQ_HOST = <host of the RabbitMQ server>
+
+[Data-store-mappings]
+# The list of common Ceph IPs for every Ceph data store
+# A dictionary of lists in Python format
+CEPH_IPS = {"name": ["IP", "IP", "IP"], "name2": ["IP", "IP", "IP"],}
 ```
-And fill it in with the RabbitMQ server's host name.
+And fill it in with the RabbitMQ server's host name, and the IP address
+mappings across different Linux versions for the Ceph data stores.
 
 Run the code with:
 ```
