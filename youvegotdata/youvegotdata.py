@@ -158,6 +158,7 @@ def resolve_data_store(filepath, ceph_mapping):
             if filepath.startswith(mount["mount_point"]):
                 data_store, fpath = resolve_ceph_store(filepath, mount, ceph_mapping)
                 break
+            continue
         if mount["mount_point"] == "/":
             # Skip this - every path will match it
             continue
