@@ -10,6 +10,7 @@ import pika
 import json
 import configparser
 from platformdirs import user_config_dir
+from pathlib import Path
 
 DESCRIPTION = """
 Allows a data ingest process to send a new file notification to the Data
@@ -145,7 +146,7 @@ def resolve_data_store(filepath, ceph_mapping):
     filepath: The filepath argument given to the program
     """
     # Any symbolic links in the filepath need to be resolved first
-    resolved_path = os.path.realpath(filepath)
+    resolved_path = str(Path(filepath).resolve())
     if filepath != resolved_path:
         log.info(
           f"Symbolic links in filepath resolved. New path = {resolved_path}"
