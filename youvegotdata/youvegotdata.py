@@ -86,7 +86,7 @@ def parse_mountinfo():
 
 
 def resolve_ceph_store(filepath, mount, ceph_mapping):
-    log.info(
+    log.debug(
         f"Ceph Source: {mount['mount_source']:<20} Mount Point: {mount['mount_point']:<20} FS Type: {mount['filesystem_type']:<10} Options: {mount['super_options']}"
     )
 
@@ -144,6 +144,14 @@ def resolve_data_store(filepath, ceph_mapping):
     Get the data store name and the absolute path from the data store.
     filepath: The filepath argument given to the program
     """
+    # Any symbolic links in the filepath need to be resolved first
+    resolved_path = os.path.realpath(filepath)
+    if filepath != resolved_path:
+        log.info(
+          f"Symbolic links in filepath resolved. New path = {resolved_path}"
+        )
+        filepath = resolved_path
+
     # Read the /proc/self/mountinfo file to get the data store and mount point
     # Example usage
     data_store = None
@@ -194,16 +202,23 @@ def produce_notification(
     Send a "Fair Dispatch" message via RabbitMQ
     """
 
+    log.info(f'RMQ_HOST:  {config["Settings"]["RMQ_HOST"]}')
     log.info(f'CEPH_IPS:  {config["Data-store-mappings"]["CEPH_IPS"]}')
 
     ceph_ips = json.loads(config["Data-store-mappings"]["CEPH_IPS"])
-    log.info(f'ceph_ips:  {ceph_ips}')
+    log.debug(f'ceph_ips:  {ceph_ips}')
 
     # Get the data store name and the absolute path from the data store
     data_store, fpath = resolve_data_store(filepath, ceph_ips)
     log.info(f"data_store: {data_store}, fpath: {fpath}")
 
-    log.info(f'RMQ_HOST:  {config["Settings"]["RMQ_HOST"]}')
+    if data_store is None or fpath is None:
+        log.error(
+          f"Could not resolve the data store: {data_store} and the file path:"
+          f" {fpath} from the data store for: {filepath}. No notification was"
+          f" sent!"
+        )
+        return
 
     # Establish connection and create a channel on that connection
     connection = pika.BlockingConnection(
@@ -324,7 +339,7 @@ def main():
         log.error(f"{config_fpath} not found. Please ensure the file exists.")
         exit()
 
-    log.info("Sending a new file notification")
+    log.info(f"Sending a new file notification for {pargs.filepath}")
 
     produce_notification(
         config,
