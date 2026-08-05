@@ -22,32 +22,56 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "youvegotdata"
 
+def _unescape_mountinfo(value):
+    """Undo the kernel's octal escapes used in /proc/mountinfo.
+
+    The kernel escapes spaces, tabs, newlines and backslashes as \\040, \\011,
+    \\012 and \\134 respectively when writing the mountinfo fields.
+    """
+    return (
+        value.replace("\\134", "\\")
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+    )
+
+
 def parse_mountinfo_alike(fobj):
     mount_entries = []
     for line in fobj:
         # Each line in /proc/mountinfo has a specific format
         # The fields are space-separated, but some fields can contain spaces
         # The separator between the optional fields and the rest is '- '
-        parts = line.strip().split(' - ')
+        raw_line = line.strip()
+        if not raw_line:
+            continue
+
+        parts = raw_line.split(' - ')
+        if len(parts) < 2:
+            log.warning(f"Skipping malformed mountinfo line (no '- ' separator): {raw_line}")
+            continue
 
         # Extract the first part (non-optional fields)
         first_part_fields = parts[0].split(' ')
 
         # Extract the last part (optional fields and remaining fields)
-        last_part_fields = parts[1].split(' ') if len(parts) > 1 else []
+        last_part_fields = parts[1].split(' ')
+        if len(last_part_fields) < 2:
+            log.warning(f"Skipping malformed mountinfo line (missing source): {raw_line}")
+            continue
 
         # Example of extracting common fields
         # Adjust indices based on the specific fields you need
         mount_id = int(first_part_fields[0])
         parent_id = int(first_part_fields[1])
         major_minor = first_part_fields[2]
-        root = first_part_fields[3]
-        mount_point = first_part_fields[4]
+        root = _unescape_mountinfo(first_part_fields[3])
+        mount_point = _unescape_mountinfo(first_part_fields[4])
         mount_options = first_part_fields[5].split(',')
 
         # Filesystem type, mount source, and super options are in the last part
         filesystem_type = last_part_fields[0]
-        mount_source = last_part_fields[1]
+        mount_source = _unescape_mountinfo(last_part_fields[1])
         super_options = last_part_fields[2].split(',') if len(last_part_fields) > 2 else []
 
         mount_entry = {
@@ -60,7 +84,7 @@ def parse_mountinfo_alike(fobj):
             "filesystem_type": filesystem_type,
             "mount_source": mount_source,
             "super_options": super_options,
-            "raw_line": line.strip()
+            "raw_line": raw_line
         }
         mount_entries.append(mount_entry)
 
@@ -128,16 +152,34 @@ def resolve_ceph_store(filepath, mount, ceph_mapping):
                 )
 
     if iplist:
-        for ips_map in ceph_mapping.values():
+        # Evaluate the most-specific mappings first so that a store whose IP
+        # list is a subset of another's resolves deterministically.
+        for ips_map in sorted(ceph_mapping.values(), key=len, reverse=True):
             # The ips in ips_map must all be in the "mount_source" list
             if all(item in iplist for item in ips_map):
                 # This is the needed mapping
                 data_store = f"ceph-IPs:{','.join(ips_map)}"
                 fpath = filepath
+                break
 
     # TODO, handle device dirs for ceph mounts
 
     return data_store, fpath
+
+
+def _mount_matches(filepath, mount_point):
+    """Check that filepath lives under mount_point (path-boundary aware)."""
+    mp = mount_point.rstrip("/") or "/"
+    if mp == "/":
+        return filepath.startswith("/")
+    return filepath == mp or filepath.startswith(mp + "/")
+
+
+def _join_store_path(source_path, remainder):
+    """Join a mount source's path with the filepath remainder, avoiding `//`."""
+    if not remainder:
+        return source_path
+    return os.path.join(source_path, remainder.lstrip("/"))
 
 
 def resolve_data_store(filepath, ceph_mapping):
@@ -153,37 +195,46 @@ def resolve_data_store(filepath, ceph_mapping):
         )
         filepath = resolved_path
 
-    # Read the /proc/self/mountinfo file to get the data store and mount point
-    # Example usage
+    # Read the /proc/self/mountinfo file to get the data store and mount point.
+    # The mount point with the longest prefix match wins (ceph mounts take part
+    # in the same comparison); on equal-length matches the later entry in
+    # mountinfo is the active, topmost overmount and wins.
     data_store = None
     fpath = None
-    mp_match_len = 0
+    best_mount = None
+    best_mp_len = -1
     log.debug("Currently mounted filesystems:")
     for mount in parse_mountinfo():
         log.debug(
             f"Source: {mount['mount_source']:<20} Mount Point: {mount['mount_point']:<20} FS Type: {mount['filesystem_type']:<10} Options: {mount['super_options']}"
         )
-        if mount["filesystem_type"] == "ceph":
-            if filepath.startswith(mount["mount_point"]):
-                data_store, fpath = resolve_ceph_store(filepath, mount, ceph_mapping)
-                break
-            continue
         if mount["mount_point"] == "/":
             # Skip this - every path will match it
             continue
-        # Check all the mount points and use the one with the longest match
-        if (
-            filepath.startswith(mount["mount_point"])
-            and len(mount["mount_point"]) > mp_match_len
-        ):
-            mp_match_len = len(mount["mount_point"])
-            dev_dir = mount["mount_source"].split(":")
-            data_store = dev_dir[0]
-            if len(dev_dir) == 2:
-                # There is a path associated with the mount_source. Replace the mount point with this path.
-                fpath = dev_dir[1] + filepath[mp_match_len:]
-            else:
-                fpath = filepath
+        if not _mount_matches(filepath, mount["mount_point"]):
+            continue
+        mp_len = len(mount["mount_point"])
+        if mp_len < best_mp_len:
+            continue
+        # Longest match wins; ties go to the later (active/topmost) mount
+        best_mp_len = mp_len
+        best_mount = mount
+
+    if best_mount is None:
+        return data_store, fpath
+
+    if best_mount["filesystem_type"] == "ceph":
+        return resolve_ceph_store(filepath, best_mount, ceph_mapping)
+
+    dev_dir = best_mount["mount_source"].split(":")
+    data_store = dev_dir[0]
+    if len(dev_dir) == 2:
+        # There is a path associated with the mount_source. Replace the mount
+        # point with this path.
+        remainder = filepath[len(best_mount["mount_point"]):]
+        fpath = _join_store_path(dev_dir[1], remainder)
+    else:
+        fpath = filepath
 
     return data_store, fpath
 
@@ -200,13 +251,23 @@ def produce_notification(
     checksum_type=None,
 ):
     """
-    Send a "Fair Dispatch" message via RabbitMQ
+    Send a "Fair Dispatch" message via RabbitMQ.
+
+    Returns True if the notification was sent, False otherwise.
     """
 
     log.info(f'RMQ_HOST:  {config["Settings"]["RMQ_HOST"]}')
     log.info(f'CEPH_IPS:  {config["Data-store-mappings"]["CEPH_IPS"]}')
 
-    ceph_ips = json.loads(config["Data-store-mappings"]["CEPH_IPS"])
+    try:
+        ceph_ips = json.loads(config["Data-store-mappings"]["CEPH_IPS"])
+    except (ValueError, TypeError) as exc:
+        log.error(
+            "The CEPH_IPS setting must be valid JSON (double quotes and no"
+            f" trailing commas). Got: {config['Data-store-mappings']['CEPH_IPS']}."
+            f" Error: {exc}"
+        )
+        return False
     log.debug(f'ceph_ips:  {ceph_ips}')
 
     # Get the data store name and the absolute path from the data store
@@ -219,50 +280,56 @@ def produce_notification(
           f" {fpath} from the data store for: {filepath}. No notification was"
           f" sent!"
         )
-        return
+        return False
 
-    # Establish connection and create a channel on that connection
-    connection = pika.BlockingConnection(
-        pika.ConnectionParameters(host=config["Settings"]["RMQ_HOST"])
-    )
-    channel = connection.channel()
+    try:
+        # Establish connection and create a channel on that connection
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=config["Settings"]["RMQ_HOST"])
+        )
+        channel = connection.channel()
 
-    # Ensure the durable file_notif_queue exists
-    channel.queue_declare(queue="file_notif_queue", durable=True)
+        # Ensure the durable file_notif_queue exists
+        channel.queue_declare(queue="file_notif_queue", durable=True)
 
-    # Put the message data in a dictionary for conversion to JSON
-    msg_dict = {
-        "data_store": data_store,
-        "filepath": fpath,
-        "product": product,
-        "version": version,
-        "start_time": start_time,
-        "end_time": end_time,
-        "length": length,
-        "checksum": checksum,
-        "checksum_type": checksum_type,
-    }
+        # Put the message data in a dictionary for conversion to JSON
+        msg_dict = {
+            "data_store": data_store,
+            "filepath": fpath,
+            "product": product,
+            "version": version,
+            "start_time": start_time,
+            "end_time": end_time,
+            "length": length,
+            "checksum": checksum,
+            "checksum_type": checksum_type,
+        }
 
-    msg_json = json.dumps(msg_dict)
+        msg_json = json.dumps(msg_dict)
 
-    # Send the JSON formatted message
-    channel.basic_publish(
-        exchange="",
-        routing_key="file_notif_queue",
-        body=msg_json,
-        properties=pika.BasicProperties(delivery_mode=pika.DeliveryMode.Persistent),
-    )
-    log.debug(f" [x] Sent {msg_json}")
+        # Send the JSON formatted message
+        channel.basic_publish(
+            exchange="",
+            routing_key="file_notif_queue",
+            body=msg_json,
+            properties=pika.BasicProperties(delivery_mode=pika.DeliveryMode.Persistent),
+        )
+        log.debug(f" [x] Sent {msg_json}")
 
-    # Close the connection to make sure the message actually gets sent - buffers
-    # are flushed
-    connection.close()
+        # Close the connection to make sure the message actually gets sent - buffers
+        # are flushed
+        connection.close()
+    except pika.exceptions.AMQPError as exc:
+        log.error(f"RabbitMQ error while sending the notification: {exc}")
+        raise
+
+    return True
 
 
 def main():
 
     # Parse the arguments
-    parser = argparse.ArgumentParser(f"{DESCRIPTION}python youvegotdata.py")
+    parser = argparse.ArgumentParser(prog="ygd", description=DESCRIPTION.strip())
 
     # Add the positional argument(s?)
     parser.add_argument(
@@ -334,15 +401,28 @@ def main():
     config_fpath = os.path.join(config_dpath, "config.ini")
     log.debug(f"config_fpath = {config_fpath}")
 
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)
     files_read = config.read(config_fpath)
     if not files_read:
         log.error(f"{config_fpath} not found. Please ensure the file exists.")
-        exit()
+        sys.exit(1)
+
+    if not config.has_option("Settings", "RMQ_HOST"):
+        log.error(f"Missing `[Settings] RMQ_HOST` in {config_fpath}.")
+        sys.exit(1)
+    if not config.has_option("Data-store-mappings", "CEPH_IPS"):
+        log.error(f"Missing `[Data-store-mappings] CEPH_IPS` in {config_fpath}.")
+        sys.exit(1)
+
+    # The filepath file must exist on the local machine
+    resolved_path = str(Path(pargs.filepath).resolve())
+    if not os.path.exists(resolved_path):
+        log.error(f"The file {pargs.filepath} does not exist. No notification was sent.")
+        sys.exit(1)
 
     log.info(f"Sending a new file notification for {pargs.filepath}")
 
-    produce_notification(
+    sent = produce_notification(
         config,
         pargs.filepath,
         pargs.product,
@@ -353,6 +433,8 @@ def main():
         pargs.checksum,
         pargs.checksum_type,
     )
+    if not sent:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

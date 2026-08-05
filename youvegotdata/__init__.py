@@ -4,13 +4,9 @@ try:
     import importlib.metadata
 
     __version__ = importlib.metadata.version(__package__ or __name__)
-except ModuleNotFoundError:
-    try:
-        import importlib_metadata
-
-        __version__ = importlib_metadata.version(__package__ or __name__)
-    except ModuleNotFoundError:
-        logging.debug(
-            "Could not set __version__ because importlib.metadata is not available."
-            + "If running python 3.7, installing importlib-metadata will fix this issue"
-        )
+except Exception:
+    __version__ = "unknown"
+    logging.debug(
+        "Could not determine __version__ - the package is not installed as a "
+        "distribution (install it or run `pip install -e .`)."
+    )
