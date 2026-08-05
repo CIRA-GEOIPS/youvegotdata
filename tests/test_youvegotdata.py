@@ -5,11 +5,14 @@ import io
 import json
 import ast
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+import pika
 
 from youvegotdata.youvegotdata import (
+    main,
     parse_mountinfo,
     parse_mountinfo_alike,
     produce_notification,
@@ -141,6 +144,21 @@ class TestParseMountinfoAlike:
         assert "rw" in opts
         assert "relatime" in opts
 
+    def test_blank_lines_are_ignored(self):
+        entries = parse_mountinfo_alike(
+            _lines("", LOCAL_MOUNTINFO_LINE, "", "   ", NFS_MOUNTINFO_LINE)
+        )
+        assert len(entries) == 2
+        assert entries[0]["mount_point"] == "/data"
+
+    def test_octal_escapes_in_mount_point_are_unescaped(self):
+        line = (
+            "23 1 8:1 / /mnt/my\\040data rw,relatime shared:1"
+            " - ext4 /dev/sda1 rw,errors=remount-ro"
+        )
+        entries = parse_mountinfo_alike(_lines(line))
+        assert entries[0]["mount_point"] == "/mnt/my data"
+
 
 # ---------------------------------------------------------------------------
 # parse_mountinfo
@@ -240,8 +258,8 @@ class TestResolveDataStore:
             "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
         ):
             data_store, fpath = resolve_data_store("/mnt/data3/subdir/file.hdf", ceph_ips)
-        assert data_store == None
-        assert fpath == None
+        assert data_store is None
+        assert fpath is None
 
     def test_nfs_mount_returns_server_and_remote_path(self):
         ceph_ips = self._make_ceph_mapping()
@@ -290,6 +308,92 @@ class TestResolveDataStore:
         assert data_store == "/dev/sdb1"
         assert fpath == "/data/archive/file.hdf"
 
+    @staticmethod
+    def _ceph_line(mount_point, ips):
+        """Build a Rocky 8.7-style ceph mountinfo line."""
+        source = ",".join(f"{ip}:6789" for ip in ips) + ":/"
+        return (
+            "900 76 0:55 / " + mount_point + " rw,relatime shared:436 - ceph"
+            " " + source + " rw,name=admin,secret=<hidden>,acl"
+        )
+
+    def test_path_boundary_must_be_respected(self):
+        # /data must not match a sibling like /datafoo
+        ceph_ips = self._make_ceph_mapping()
+        mounts = self._mock_parse(LOCAL_MOUNTINFO_LINE)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store("/datafoo/file.hdf", ceph_ips)
+        assert data_store is None
+        assert fpath is None
+
+    def test_longest_ceph_mount_wins_regardless_of_order(self):
+        # The shorter ceph mount appears first, but the longest prefix must win.
+        short_ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        long_ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"]
+        ceph_mapping = {"short": short_ips, "long": long_ips}
+        mounts = self._mock_parse(
+            self._ceph_line("/mnt/data2", short_ips),
+            self._ceph_line("/mnt/data2/archive", long_ips),
+        )
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store(
+                "/mnt/data2/archive/file.hdf", ceph_mapping
+            )
+        assert data_store == "ceph-IPs:10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4"
+        assert fpath == "/mnt/data2/archive/file.hdf"
+
+    def test_longer_non_ceph_mount_beats_shorter_ceph_mount(self):
+        short_ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
+        ceph_mapping = {"short": short_ips}
+        ceph_line = self._ceph_line("/mnt/data2", short_ips)
+        ext_deep_line = "24 23 8:2 / /mnt/data2/deep rw,relatime - ext4 /dev/sdb2 rw"
+        mounts = self._mock_parse(ceph_line, ext_deep_line)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store(
+                "/mnt/data2/deep/file.hdf", ceph_mapping
+            )
+        assert data_store == "/dev/sdb2"
+        assert fpath == "/mnt/data2/deep/file.hdf"
+
+    def test_overmounted_path_uses_later_entry(self):
+        # Same mount point twice: the later (topmost) mount is the active one.
+        bottom = "23 1 8:1 / /mnt/data rw,relatime shared:1 - ext4 /dev/sda1 rw"
+        top = "24 23 8:2 / /mnt/data rw,relatime shared:2 - ext4 /dev/sdb1 rw"
+        mounts = self._mock_parse(bottom, top)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, _ = resolve_data_store("/mnt/data/file.hdf", {})
+        assert data_store == "/dev/sdb1"
+
+    def test_octal_escaped_mount_point_resolves(self):
+        line = (
+            "23 1 8:1 / /mnt/my\\040data rw,relatime shared:1"
+            " - ext4 /dev/sda1 rw,errors=remount-ro"
+        )
+        mounts = self._mock_parse(line)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, _ = resolve_data_store("/mnt/my data/file.hdf", {})
+        assert data_store == "/dev/sda1"
+
+    def test_nfs_root_export_path_has_no_double_slash(self):
+        line = "42 1 0:35 / /mnt/nfs rw,relatime shared:2 - nfs4 nfsserver:/ rw,vers=4"
+        mounts = self._mock_parse(line)
+        with patch(
+            "youvegotdata.youvegotdata.parse_mountinfo", return_value=mounts
+        ):
+            data_store, fpath = resolve_data_store("/mnt/nfs/sub/file.hdf", {})
+        assert data_store == "nfsserver"
+        assert fpath == "/sub/file.hdf"
+
 
 # ---------------------------------------------------------------------------
 # produce_notification
@@ -318,7 +422,7 @@ class TestProduceNotification:
             checksum_type="md5",
         )
         defaults.update(kwargs)
-        logging.debug("defaults: {defaults}")
+        logging.debug(f"defaults: {defaults}")
         ceph_ips = ast.literal_eval(defaults["config"]["Data-store-mappings"]["CEPH_IPS"])
         assert ceph_ips["/mnt/data2"] == ["168.10.10.9", "168.10.10.11", "168.10.10.12"]
 
@@ -399,3 +503,170 @@ class TestProduceNotification:
         props = mock_channel.basic_publish.call_args.kwargs["properties"]
         # BasicProperties stores delivery_mode as an integer; compare via .value
         assert props.delivery_mode == pika_mod.DeliveryMode.Persistent.value
+
+    def test_returns_true_when_notification_sent(self):
+        mock_channel = MagicMock()
+        mock_connection = MagicMock()
+        mock_connection.channel.return_value = mock_channel
+        with patch(
+            "youvegotdata.youvegotdata.resolve_data_store",
+            return_value=("/dev/sda1", "/data/file.hdf"),
+        ):
+            with patch(
+                "youvegotdata.youvegotdata.pika.BlockingConnection",
+                return_value=mock_connection,
+            ):
+                result = produce_notification(
+                    config=self._make_config(),
+                    filepath="/data/file.hdf",
+                    product="VIIRS",
+                    version="1.0",
+                )
+        assert result is True
+
+    def test_bad_ceph_ips_json_returns_false(self):
+        config = self._make_config(ip_mapping='{"/mnt/data2": ["10.0.0.1",]}')
+        with patch("youvegotdata.youvegotdata.resolve_data_store") as mock_resolve:
+            result = produce_notification(
+                config=config,
+                filepath="/data/file.hdf",
+                product=None,
+                version=None,
+            )
+        assert result is False
+        mock_resolve.assert_not_called()
+
+    def test_unresolved_store_returns_false(self):
+        with patch(
+            "youvegotdata.youvegotdata.resolve_data_store",
+            return_value=(None, None),
+        ):
+            result = produce_notification(
+                config=self._make_config(),
+                filepath="/data/file.hdf",
+                product=None,
+                version=None,
+            )
+        assert result is False
+
+    def test_pika_failure_raises_and_logs_error(self, caplog):
+        with patch(
+            "youvegotdata.youvegotdata.resolve_data_store",
+            return_value=("/dev/sda1", "/data/file.hdf"),
+        ):
+            with patch(
+                "youvegotdata.youvegotdata.pika.BlockingConnection",
+                side_effect=pika.exceptions.AMQPConnectionError("down"),
+            ):
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(pika.exceptions.AMQPConnectionError):
+                        produce_notification(
+                            config=self._make_config(),
+                            filepath="/data/file.hdf",
+                            product=None,
+                            version=None,
+                        )
+        assert any("RabbitMQ error" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+
+class TestMain:
+    _VALID_CFG = (
+        "[Settings]\nRMQ_HOST = rmq.example.com\n"
+        '[Data-store-mappings]\nCEPH_IPS = {"s": ["10.0.0.1"]}\n'
+    )
+
+    def _invoke(self, tmp_path, monkeypatch, config_text=_VALID_CFG, create_file=True):
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir(exist_ok=True)
+        if config_text is not None:
+            (cfg_dir / "config.ini").write_text(config_text)
+        monkeypatch.setattr(
+            "youvegotdata.youvegotdata.user_config_dir", lambda app: str(cfg_dir)
+        )
+        filepath = str(tmp_path / "data" / "file.hdf")
+        if create_file:
+            Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+            Path(filepath).touch()
+        monkeypatch.setattr("sys.argv", ["ygd", filepath])
+        return filepath
+
+    def test_help_shows_prog_and_description(self, capsys):
+        with patch("sys.argv", ["ygd", "--help"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "usage: ygd" in out
+        assert "new file notification" in out
+
+    def test_missing_config_exits_1(self, tmp_path, monkeypatch):
+        self._invoke(tmp_path, monkeypatch, config_text=None, create_file=False)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_missing_rmq_host_exits_1(self, tmp_path, monkeypatch):
+        cfg = '[Data-store-mappings]\nCEPH_IPS = {"s": ["10.0.0.1"]}\n'
+        self._invoke(tmp_path, monkeypatch, config_text=cfg)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_missing_ceph_ips_exits_1(self, tmp_path, monkeypatch):
+        cfg = "[Settings]\nRMQ_HOST = rmq.example.com\n"
+        self._invoke(tmp_path, monkeypatch, config_text=cfg)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_missing_file_exits_1(self, tmp_path, monkeypatch):
+        self._invoke(tmp_path, monkeypatch, create_file=False)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_bad_ceph_ips_json_exits_1(self, tmp_path, monkeypatch):
+        cfg = (
+            "[Settings]\nRMQ_HOST = rmq.example.com\n"
+            '[Data-store-mappings]\nCEPH_IPS = {"s": ["10.0.0.1",]}\n'
+        )
+        self._invoke(tmp_path, monkeypatch, config_text=cfg)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_unresolved_store_exits_1(self, tmp_path, monkeypatch):
+        self._invoke(tmp_path, monkeypatch)
+        with patch(
+            "youvegotdata.youvegotdata.resolve_data_store",
+            return_value=(None, None),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_percent_in_config_value_is_not_interpolated(self, tmp_path, monkeypatch):
+        # '%' must not trigger configparser interpolation.
+        cfg = (
+            "[Settings]\nRMQ_HOST = rmq-%s.example.com\n"
+            '[Data-store-mappings]\nCEPH_IPS = {"s": ["10.0.0.1"]}\n'
+        )
+        self._invoke(tmp_path, monkeypatch, config_text=cfg)
+        mock_channel = MagicMock()
+        mock_connection = MagicMock()
+        mock_connection.channel.return_value = mock_channel
+        with patch(
+            "youvegotdata.youvegotdata.resolve_data_store",
+            return_value=("/dev/sda1", "/data/file.hdf"),
+        ):
+            with patch(
+                "youvegotdata.youvegotdata.pika.BlockingConnection",
+                return_value=mock_connection,
+            ):
+                main()
+        # main() exits 0 without raising InterpolationMissingOptionError
