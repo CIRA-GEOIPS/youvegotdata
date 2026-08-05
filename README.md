@@ -29,8 +29,8 @@ RMQ_HOST = <host of the RabbitMQ server>
 
 [Data-store-mappings]
 # The list of common Ceph IPs for every Ceph data store
-# A dictionary of lists in Python format
-CEPH_IPS = {"name": ["IP", "IP", "IP"], "name2": ["IP", "IP", "IP"],}
+# A dictionary of lists. This must be valid JSON: double quotes, no trailing commas.
+CEPH_IPS = {"name": ["IP", "IP", "IP"], "name2": ["IP", "IP", "IP"]}
 ```
 And fill it in with the RabbitMQ server's host name, and the IP address
 mappings across different Linux versions for the Ceph data stores.
@@ -45,6 +45,5 @@ This will usually be run with just the `filepath` argument. An example is:
 ```
 ygd /full/path/to/local/file/data_file.hdf
 ```
-If run from a local repository of this project.
 
 The `filepath` file must exist on the local machine.
