@@ -20,6 +20,81 @@ pip install youvegotdata
 ```
 Which will install the `ygd` CLI command in your current Python environment.
 
+## Library usage
+`youvegotdata` is also importable as a plain Python package so that ingest
+scripts can send notifications programmatically instead of shelling out to the
+`ygd` CLI. The public API is re-exported from the top-level package:
+
+```python
+from youvegotdata import (
+    Config,
+    ConfigError,
+    Notification,
+    load_config,
+    resolve_data_store,
+    send_notification,
+)
+```
+
+### Loading configuration
+`load_config()` reads and validates `~/.config/youvegotdata/config.ini` (the
+same file the CLI uses) and returns a frozen `Config` dataclass. Validation
+errors raise `ConfigError`:
+
+```python
+try:
+    config = load_config()
+except ConfigError as exc:
+    print(f"configuration problem: {exc}")
+    raise
+```
+
+To point at a specific file (e.g. for tests), pass an explicit path:
+
+```python
+config = load_config("/path/to/config.ini")
+```
+
+The returned `Config` exposes `rmq_host` (str) and `ceph_ips`
+(dict[str, list[str]]).
+
+### Resolving a data store from a filepath
+`resolve_data_store` maps a local path to its data store name and a
+store-relative path. It reads `/proc/self/mountinfo`, so it only works on
+Linux:
+
+```python
+data_store, store_path = resolve_data_store("/data/file.hdf", config.ceph_ips)
+```
+
+### Sending a notification
+Build a `Notification` and pass it (plus a `Config`) to `send_notification`.
+It publishes one durable JSON message to the `file_notif_queue` queue and
+returns `True` on success or `False` if the data store could not be resolved.
+RabbitMQ errors are logged and re-raised as `pika.exceptions.AMQPError`:
+
+```python
+notification = Notification(
+    filepath="/data/file.hdf",
+    product="VIIRS",
+    version="1.0",
+    start_time="2024-01-01T00:00:00",
+    end_time="2024-01-01T01:00:00",
+    length=1024,
+    checksum="abc123",
+    checksum_type="md5",
+)
+send_notification(notification, config)
+```
+
+Only `filepath` is required; the rest default to `None`.
+
+### Backward compatibility
+The v1.x function `produce_notification(config, filepath, ...)` is kept as a
+deprecated shim that emits a `DeprecationWarning` and forwards to
+`send_notification`. It still accepts a raw `configparser.ConfigParser` or a
+`Config`. New code should use `send_notification` instead.
+
 ## Running youvegotdata.py as ygd
 Create the ~/.config/youvegotdata/ directory if it does not already exist.
 Create a `config.ini` file in this directory that looks like:
