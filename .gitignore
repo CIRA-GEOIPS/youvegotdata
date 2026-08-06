@@ -47,6 +47,7 @@ cover/
 
 # Environments/configuration
 config.ini
+.venv/
 
 # Data and Reference Files
 *.npy
