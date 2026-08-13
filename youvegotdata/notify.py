@@ -41,12 +41,16 @@ class Notification:
         The first date and time for which the file has data.
     end_time : str, optional
         The last date and time for which the file has data.
-    length : int, optional
-        The length (size) of the file.
+    size : int, optional
+        The size (length) of the file.
     checksum : str, optional
         The file's checksum.
-    checksum_type : str, optional
-        The type (algorithm) of the checksum.
+    platform_name : str, optional
+        The file's platform name, usually the satellite name.
+    source_name : str, optional
+        The file's source name, usually the instrument name.
+    addl_metadata : dictionary, optional
+        The additional metadata from the file needed for searching.
     """
 
     filepath: str
@@ -54,9 +58,11 @@ class Notification:
     version: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
-    length: Optional[int] = None
+    size: Optional[int] = None
     checksum: Optional[str] = None
-    checksum_type: Optional[str] = None
+    platform_name: Optional[str] = None
+    source_name: Optional[str] = None
+    addl_metadata : Optional[dict] = None
 
     def to_message(self) -> Dict[str, Any]:
         """Return the message as a JSON-serializable dictionary."""
@@ -157,9 +163,11 @@ def produce_notification(
     version,
     start_time=None,
     end_time=None,
-    length=None,
+    size=None,
     checksum=None,
-    checksum_type=None,
+    platform_name=None,
+    source_name=None,
+    addl_metadata={},
 ) -> bool:
     """Deprecated compatibility shim for :func:`send_notification`.
 
@@ -207,9 +215,11 @@ def produce_notification(
         version=version,
         start_time=start_time,
         end_time=end_time,
-        length=length,
+        size=size,
         checksum=checksum,
-        checksum_type=checksum_type,
+        platform_name=platform_name,
+        source_name=source_name,
+        addl_metadata=addl_metadata,
     )
     return send_notification(notification, cfg)
 

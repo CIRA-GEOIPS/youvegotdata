@@ -1,6 +1,7 @@
 """Unit tests for youvegotdata.notify."""
 
 import json
+import datetime
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -19,13 +20,20 @@ from conftest import make_config, make_configparser
 def _default_notification(**kwargs):
     defaults = dict(
         filepath="/data/file.hdf",
-        product="VIIRS",
+        product="L2_VIS",
         version="1.0",
         start_time="2024-01-01T00:00:00",
         end_time="2024-01-01T01:00:00",
-        length=1024,
+        size=1024,
         checksum="abc123",
-        checksum_type="md5",
+        platform_name="VIIRS",
+        source_name="imager",
+        addl_metadata={
+            "geoips_variables": {
+                "variables": ["red", "green", "blue"],
+                "SSP_spatial_resolution": "0.02",
+            }
+        },
     )
     defaults.update(kwargs)
     return Notification(**defaults)
@@ -81,24 +89,31 @@ class TestSendNotification:
         msg = json.loads(body)
         assert msg["data_store"] == "/dev/sda1"
         assert msg["filepath"] == "/data/file.hdf"
-        assert msg["product"] == "VIIRS"
+        assert msg["product"] == "L2_VIS"
         assert msg["version"] == "1.0"
         assert msg["checksum"] == "abc123"
-        assert msg["checksum_type"] == "md5"
+        assert msg["platform_name"] == "VIIRS"
+        assert msg["source_name"] == "imager"
+        assert msg["addl_metadata"] == {
+            "geoips_variables": {
+                "variables": ["red", "green", "blue"],
+                "SSP_spatial_resolution": "0.02",
+            }
+        }
+
 
     def test_optional_fields_default_to_none(self):
         _, _, mock_channel = _run(
             start_time=None,
             end_time=None,
-            length=None,
+            size=None,
             checksum=None,
-            checksum_type=None,
         )
         body = mock_channel.basic_publish.call_args.kwargs["body"]
         msg = json.loads(body)
         assert msg["start_time"] is None
         assert msg["end_time"] is None
-        assert msg["length"] is None
+        assert msg["size"] is None
 
     def test_connection_closed_after_publish(self):
         _, mock_connection, _ = _run()
@@ -177,7 +192,7 @@ class TestProduceNotificationShim:
                     result = produce_notification(
                         config=make_configparser(),
                         filepath="/data/file.hdf",
-                        product="VIIRS",
+                        product="L2_VIS",
                         version="1.0",
                     )
         assert result is True
@@ -226,7 +241,7 @@ class TestProduceNotificationShim:
                     result = produce_notification(
                         config=make_config(),
                         filepath="/data/file.hdf",
-                        product="VIIRS",
+                        product="L2_VIS",
                         version="1.0",
                     )
         assert result is True
