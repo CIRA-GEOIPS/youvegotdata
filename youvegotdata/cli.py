@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 import os
 import sys
 from typing import List, Optional, Sequence
@@ -83,9 +84,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-c", "--checksum", default=None, help="The file's checksum")
     parser.add_argument(
         "-t",
-        "--checksum_type",
+        "--platform_name",
         default=None,
-        help="The type of the checksum - its algorithm",
+        help="The platform name - usually the satellite name",
+    )
+    parser.add_argument(
+        "-o",
+        "--source_name",
+        default=None,
+        help="The source name - usually the instrument name",
+    )
+    parser.add_argument(
+        "-a",
+        "--addl_metadata",
+        default=None,
+        help="Any critical additional metadata - JSON formated key, value pairs",
     )
     return parser
 
@@ -152,9 +165,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         version=pargs.version,
         start_time=pargs.start_time,
         end_time=pargs.end_time,
-        length=pargs.length,
+        size=pargs.length,
         checksum=pargs.checksum,
-        checksum_type=pargs.checksum_type,
+        platform_name=pargs.platform_name,
+        source_name=pargs.source_name,
+        addl_metadata=json.loads(pargs.addl_metadata)
     )
 
     sent = send_notification(notification, config)
