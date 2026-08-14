@@ -159,6 +159,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     log.debug("Resolved filepath: %s", resolved_path)
 
+    addl_metadata = (
+        json.loads(pargs.addl_metadata)
+        if pargs.addl_metadata is not None
+        else None
+    )
+
     notification = Notification(
         filepath=pargs.filepath,
         product=pargs.product,
@@ -169,7 +175,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         checksum=pargs.checksum,
         platform_name=pargs.platform_name,
         source_name=pargs.source_name,
-        addl_metadata=json.loads(pargs.addl_metadata)
+        addl_metadata=addl_metadata
     )
 
     sent = send_notification(notification, config)
