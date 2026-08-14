@@ -16,10 +16,20 @@ Or publish a notification directly::
     config = load_config()
     notification = Notification(
         filepath="/data/file.hdf",
-        product="VIIRS",
+        product="L2_VIS",
         version="1.0",
+        start_time="2024-01-01T00:00:00",
+        end_time="2024-01-01T01:00:00",
+        size=1024,
         checksum="abc123",
-        checksum_type="md5",
+        platform_name="VIIRS",
+        source_name="imager",
+        addl_metadata={
+            "geoips_variables": {
+                "variables": ["red", "green", "blue"],
+                "SSP_spatial_resolution": "0.02 km",
+            }
+        },
     )
     send_notification(notification, config)
 """

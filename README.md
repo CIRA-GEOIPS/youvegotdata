@@ -76,18 +76,26 @@ RabbitMQ errors are logged and re-raised as `pika.exceptions.AMQPError`:
 ```python
 notification = Notification(
     filepath="/data/file.hdf",
-    product="VIIRS",
+    product="L2_VIS",
     version="1.0",
     start_time="2024-01-01T00:00:00",
     end_time="2024-01-01T01:00:00",
-    length=1024,
+    size=1024,
     checksum="abc123",
-    checksum_type="md5",
+    platform_name="VIIRS",
+    source_name="imager",
+    addl_metadata={
+        "geoips_variables": {
+            "variables": ["red", "green", "blue"],
+            "SSP_spatial_resolution": "0.02 km",
+        }
+    },
 )
 send_notification(notification, config)
 ```
 
-Only `filepath` is required; the rest default to `None`.
+Only `filepath` is required; the rest default to `None`. The `checksum` must be
+an xxhash value if it is included.
 
 ### Backward compatibility
 The v1.x function `produce_notification(config, filepath, ...)` is kept as a
@@ -112,7 +120,7 @@ mappings across different Linux versions for the Ceph data stores.
 
 Run the code with:
 ```
-ygd [-h] [-v] [-p PRODUCT] [-r VERSION] [-s START_TIME] [-e END_TIME] [-l LENGTH] [-c CHECKSUM] [-t CHECKSUM_TYPE] filepath
+ygd [-h] [-v] [-p PRODUCT] [-r VERSION] [-s START_TIME] [-e END_TIME] [-l LENGTH] [-c CHECKSUM] [-t PLATFORM_NAME] [-o SOURCE_NAME] [-a ADDL_METADATA] filepath
 ```
 Run this with the -h (--help) argument to see the available flagged arguments.
 

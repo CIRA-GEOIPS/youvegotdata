@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 import os
 import sys
 from typing import List, Optional, Sequence
@@ -78,14 +79,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="The last date and time for which the file has data",
     )
     parser.add_argument(
-        "-l", "--length", default=None, help="The length(size) of the file"
+        "-l", "--length",
+        type=int,
+        default=None,
+        help="The length(size) of the file"
     )
-    parser.add_argument("-c", "--checksum", default=None, help="The file's checksum")
+    parser.add_argument(
+        "-c",
+        "--checksum",
+        default=None,
+        help="The file's xxhash checksum"
+    )
     parser.add_argument(
         "-t",
-        "--checksum_type",
+        "--platform_name",
         default=None,
-        help="The type of the checksum - its algorithm",
+        help="The platform name - usually the satellite name",
+    )
+    parser.add_argument(
+        "-o",
+        "--source_name",
+        default=None,
+        help="The source name - usually the instrument name",
+    )
+    parser.add_argument(
+        "-a",
+        "--addl_metadata",
+        default=None,
+        help=(
+            "Any critical additional metadata -"
+            " JSON formatted key, value pairs"
+        ),
     )
     return parser
 
@@ -146,15 +170,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     log.debug("Resolved filepath: %s", resolved_path)
 
+    try:
+        addl_metadata = (
+            json.loads(pargs.addl_metadata)
+            if pargs.addl_metadata is not None
+            else None
+        )
+    except json.JSONDecodeError as exc:
+        log.error("Additional metadata must be valid JSON: %s", exc)
+        return 1
+    if addl_metadata is not None and not isinstance(addl_metadata, dict):
+        log.error("Additional metadata must be a JSON object.")
+        return 1
+
     notification = Notification(
         filepath=pargs.filepath,
         product=pargs.product,
         version=pargs.version,
         start_time=pargs.start_time,
         end_time=pargs.end_time,
-        length=pargs.length,
+        size=pargs.length,
         checksum=pargs.checksum,
-        checksum_type=pargs.checksum_type,
+        platform_name=pargs.platform_name,
+        source_name=pargs.source_name,
+        addl_metadata=addl_metadata
     )
 
     sent = send_notification(notification, config)
