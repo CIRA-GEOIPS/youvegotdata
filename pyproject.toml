@@ -9,7 +9,7 @@ authors = [
   {name = "Jim Fluke", email = "james.fluke@colostate.edu" }
 ]
 name = "youvegotdata" # REQUIRED
-version = "2.0.0"
+version = "2.1.0"
 description = "Send new file notifications"
 readme = "README.md"
 
