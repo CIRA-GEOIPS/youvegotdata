@@ -1,7 +1,6 @@
 """Unit tests for youvegotdata.notify."""
 
 import json
-import datetime
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -31,7 +30,7 @@ def _default_notification(**kwargs):
         addl_metadata={
             "geoips_variables": {
                 "variables": ["red", "green", "blue"],
-                "SSP_spatial_resolution": "0.02",
+                "SSP_spatial_resolution": "0.02 km",
             }
         },
     )
@@ -97,7 +96,7 @@ class TestSendNotification:
         assert msg["addl_metadata"] == {
             "geoips_variables": {
                 "variables": ["red", "green", "blue"],
-                "SSP_spatial_resolution": "0.02",
+                "SSP_spatial_resolution": "0.02 km",
             }
         }
 

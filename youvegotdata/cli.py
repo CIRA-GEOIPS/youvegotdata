@@ -79,9 +79,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="The last date and time for which the file has data",
     )
     parser.add_argument(
-        "-l", "--length", default=None, help="The length(size) of the file"
+        "-l", "--length",
+        type=int,
+        default=None,
+        help="The length(size) of the file"
     )
-    parser.add_argument("-c", "--checksum", default=None, help="The file's checksum")
+    parser.add_argument(
+        "-c",
+        "--checksum",
+        default=None,
+        help="The file's xxhash checksum"
+    )
     parser.add_argument(
         "-t",
         "--platform_name",
@@ -98,7 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-a",
         "--addl_metadata",
         default=None,
-        help="Any critical additional metadata - JSON formated key, value pairs",
+        help=(
+            "Any critical additional metadata -"
+            " JSON formatted key, value pairs"
+        ),
     )
     return parser
 
@@ -159,11 +170,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     log.debug("Resolved filepath: %s", resolved_path)
 
-    addl_metadata = (
-        json.loads(pargs.addl_metadata)
-        if pargs.addl_metadata is not None
-        else None
-    )
+    try:
+        addl_metadata = (
+            json.loads(pargs.addl_metadata)
+            if pargs.addl_metadata is not None
+            else None
+        )
+    except json.JSONDecodeError as exc:
+        log.error("Additional metadata must be valid JSON: %s", exc)
+        return 1
+    if addl_metadata is not None and not isinstance(addl_metadata, dict):
+        log.error("Additional metadata must be a JSON object.")
+        return 1
 
     notification = Notification(
         filepath=pargs.filepath,
